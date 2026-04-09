@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Redhawk Hydration Challenge</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f3; color: #1a1a1a; min-height: 100vh; }
+  input, button { font-family: inherit; }
+  button { cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const SUPABASE_URL = "https://mnmdwhznkbtcijkekcya.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1ubWR3aHpua2J0Y2lqa2VrY3lhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2OTYwMjcsImV4cCI6MjA5MTI3MjAyN30.XhtCahSS7ssaH-WRqIMtsWS56IQatj2VpvcyuDF3cHw";
+const HEADERS = { "Content-Type": "application/json", "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` };
+
+const DAYS = [
+  { key: "mon", label: "Mon 4/14" },
+  { key: "tue", label: "Tue 4/15" },
+  { key: "wed", label: "Wed 4/16" },
+  { key: "thu", label: "Thu 4/17" },
+  { key: "fri", label: "Fri 4/18" },
+];
+
+const GOAL = 8;
+
+const BADGES = [
+  { threshold: 40, label: "Hydration Hero",     color: "#0f6e56", bg: "#e1f5ee" },
+  { threshold: 32, label: "Redhawk Reservoir",  color: "#185fa5", bg: "#e6f1fb" },
+  { threshold: 24, label: "Steady Sipper",       color: "#854f0b", bg: "#faeeda" },
+  { threshold: 1,  label: "Getting Started",     color: "#5f5e5a", bg: "#f1efe8" },
+];
+
+const AVATAR_COLORS = ["#1d9e75","#185fa5","#ba7517","#993556","#534ab7","#d85a30"];
+
+function getTotal(row) { return DAYS.reduce((s, d) => s + (Number(row?.[d.key]) || 0), 0); }
+function getBadge(total) { return BADGES.find(b => total >= b.threshold) || null; }
+function getInitials(name) { return name.trim().split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2); }
+
+function Avatar({ name, size = 40 }) {
+  const bg = AVATAR_COLORS[name.charCodeAt(0) % AVATAR_COLORS.length];
+  return (
+    <div style={{ width: size, height: size, borderRadius: "50%", background: bg, flexShrink: 0,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      color: "#fff", fontWeight: 500, fontSize: size * 0.35 }}>
+      {getInitials(name)}
+    </div>
+  );
+}
+
+async function dbGet(name) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/hydration?name=eq.${encodeURIComponent(name)}&select=*`, { headers: HEADERS });
+  const data = await res.json();
+  return data[0] || null;
+}
+
+async function dbUpsert(row) {
+  await fetch(`${SUPABASE_URL}/rest/v1/hydration`, {
+    method: "POST",
+    headers: { ...HEADERS, "Prefer": "resolution=merge-duplicates" },
+    body: JSON.stringify(row)
+  });
+}
+
+async function dbAll() {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/hydration?select=*&order=updated_at.desc`, { headers: HEADERS });
+  return await res.json();
+}
+
+export default function App() {
+  const [view, setView] = useState("log");
+  const [userName, setUserName] = useState(() => localStorage.getItem("redhawk-username") || "");
+  const [nameInput, setNameInput] = useState("");
+  const [nameError, setNameError] = useState("");
+  const [myRow, setMyRow] = useState({});
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState("");
+
+  useEffect(() => { if (userName) fetchMyRow(userName); }, [userName]);
+  useEffect(() => { if (view === "leaderboard") fetchLeaderboard(); }, [view]);
+
+  async function fetchMyRow(name) {
+    setLoading(true);
+    try { const row = await dbGet(name); setMyRow(row || {}); } catch(e) {}
+    setLoading(false);
+  }
+
+  async function fetchLeaderboard() {
+    setLoading(true);
+    try { const rows = await dbAll(); setLeaderboard(rows || []); } catch(e) {}
+    setLoading(false);
+  }
+
+  function showToast(msg) { setToast(msg); setTimeout(() => setToast(""), 2500); }
+
+  async function handleJoin() {
+    const name = nameInput.trim();
+    if (!name || name.length < 2) { setNameError("Please enter your full name."); return; }
+    setNameError("");
+    setSaving(true);
+    try {
+      await dbUpsert({ name, mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, updated_at: new Date().toISOString() });
+      localStorage.setItem("redhawk-username", name);
+      setUserName(name);
+      await fetchMyRow(name);
+      setNameInput("");
+      setView("log");
+    } catch(e) { setNameError("Error connecting. Please try again."); }
+    setSaving(false);
+  }
+
+  async function updateGlasses(dayKey, val) {
+    const clamped = Math.max(0, Math.min(20, val));
+    const updated = { ...myRow, [dayKey]: clamped, name: userName, updated_at: new Date().toISOString() };
+    setMyRow(updated);
+    setSaving(true);
+    try {
+      await dbUpsert(updated);
+      showToast("Saved!");
+    } catch(e) { showToast("Error saving."); }
+    setSaving(false);
+  }
+
+  function handleSwitchUser() {
+    localStorage.removeItem("redhawk-username");
+    setUserName(""); setMyRow({}); setNameInput(""); setView("log");
+  }
+
+  const myTotal = getTotal(myRow);
+  const myBadge = getBadge(myTotal);
+  const sorted = [...leaderboard].sort((a, b) => getTotal(b) - getTotal(a));
+  const myRank = sorted.findIndex(r => r.name === userName) + 1;
+
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto", padding: "1.5rem 1rem" }}>
+
+      {toast && (
+        <div style={{ position: "fixed", top: 16, right: 16, background: "#1d9e75", color: "#fff",
+          padding: "8px 18px", borderRadius: 8, fontSize: 14, fontWeight: 500, zIndex: 999 }}>
+          {toast}
+        </div>
+      )}
+
+      {/* Header */}
+      <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
+        <div style={{ fontSize: 26, fontWeight: 600, color: "#1a1a1a", lineHeight: 1.2 }}>
+          Redhawk Hydration Challenge
+        </div>
+        <div style={{ fontSize: 14, color: "#5f5e5a", marginTop: 4 }}>
+          April 14–18 · Marshall Public Schools · Goal: 8 glasses/day
+        </div>
+        <div style={{ display: "inline-flex", gap: 8, marginTop: 12 }}>
+          {["log", "leaderboard"].map(v => (
+            <button key={v} onClick={() => setView(v)} style={{
+              padding: "6px 16px", borderRadius: 8, fontSize: 14,
+              background: view === v ? "#e6f1fb" : "transparent",
+              color: view === v ? "#185fa5" : "#5f5e5a",
+              border: `0.5px solid ${view === v ? "rgba(24,95,165,0.35)" : "rgba(0,0,0,0.12)"}`,
+              fontWeight: view === v ? 500 : 400
+            }}>
+              {v === "log" ? "My Log" : "Leaderboard"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Join screen */}
+      {view === "log" && !userName && (
+        <div style={{ background: "#fff", border: "0.5px solid rgba(0,0,0,0.12)", borderRadius: 12, padding: "2rem", textAlign: "center" }}>
+          <div style={{ fontSize: 44, marginBottom: 8 }}>💧</div>
+          <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 8 }}>Join the Challenge</div>
+          <div style={{ fontSize: 14, color: "#5f5e5a", marginBottom: 24 }}>
+            Track your daily water intake April 14–18 and compete with colleagues across the district. Aim for 8 glasses a day!
+          </div>
+          <input value={nameInput} onChange={e => setNameInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleJoin()}
+            placeholder="Your full name"
+            style={{ width: "100%", padding: "10px 14px", borderRadius: 8,
+              border: "1px solid rgba(0,0,0,0.18)", fontSize: 15, marginBottom: 8, outline: "none" }} />
+          {nameError && <div style={{ color: "#a32d2d", fontSize: 13, marginBottom: 8 }}>{nameError}</div>}
+          <button onClick={handleJoin} disabled={saving} style={{
+            width: "100%", padding: "10px", borderRadius: 8, fontSize: 15,
+            background: "#e6f1fb", color: "#185fa5", border: "0.5px solid rgba(24,95,165,0.35)", fontWeight: 500
+          }}>
+            {saving ? "Joining..." : "Join the Challenge"}
+          </button>
+        </div>
+      )}
+
+      {/* My Log */}
+      {view === "log" && userName && (
+        <div>
+          {loading ? (
+            <div style={{ textAlign: "center", padding: "2rem", color: "#5f5e5a" }}>Loading...</div>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: "1.25rem",
+                background: "#fff", border: "0.5px solid rgba(0,0,0,0.12)", borderRadius: 12, padding: "1rem 1.25rem" }}>
+                <Avatar name={userName} size={44} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 500, fontSize: 15 }}>{userName}</div>
+                  <div style={{ fontSize: 13, color: "#5f5e5a" }}>
+                    {myTotal} glasses total · {myRank > 0 ? `Rank #${myRank}` : "Not ranked yet"}
+                  </div>
+                </div>
+                {myBadge && (
+                  <div style={{ padding: "4px 10px", borderRadius: 8, fontSize: 12, fontWeight: 500,
+                    background: myBadge.bg, color: myBadge.color }}>
+                    {myBadge.label}
+                  </div>
+                )}
+              </div>
+
+              {DAYS.map(({ key, label }) => {
+                const val = Number(myRow[key]) || 0;
+                const pct = Math.min(100, Math.round((val / GOAL) * 100));
+                const met = val >= GOAL;
+                return (
+                  <div key={key} style={{ background: "#fff", border: "0.5px solid rgba(0,0,0,0.12)",
+                    borderRadius: 12, padding: "1rem 1.25rem", marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: 500 }}>{label}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {met && <span style={{ fontSize: 12, color: "#1d9e75", fontWeight: 500 }}>Goal met!</span>}
+                        <span style={{ fontSize: 13, color: "#5f5e5a" }}>{val} / {GOAL} glasses</span>
+                      </div>
+                    </div>
+                    <div style={{ height: 6, background: "#f1efe8", borderRadius: 3, marginBottom: 12 }}>
+                      <div style={{ height: 6, borderRadius: 3, width: `${pct}%`,
+                        background: met ? "#1d9e75" : "#378add", transition: "width 0.3s" }} />
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <button onClick={() => updateGlasses(key, val - 1)} disabled={val <= 0}
+                        style={{ width: 32, height: 32, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.18)",
+                          background: "transparent", fontSize: 18, color: val > 0 ? "#1a1a1a" : "#ccc" }}>−</button>
+                      <div style={{ flex: 1, display: "flex", justifyContent: "center", gap: 6, flexWrap: "wrap" }}>
+                        {Array.from({ length: GOAL }, (_, i) => (
+                          <div key={i} onClick={() => updateGlasses(key, i + 1)} style={{
+                            width: 22, height: 22, borderRadius: "50%", cursor: "pointer",
+                            background: i < val ? (met ? "#1d9e75" : "#378add") : "#f1efe8",
+                            border: `0.5px solid ${i < val ? "transparent" : "rgba(0,0,0,0.12)"}`,
+                            transition: "background 0.15s"
+                          }} />
+                        ))}
+                      </div>
+                      <button onClick={() => updateGlasses(key, val + 1)}
+                        style={{ width: 32, height: 32, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.18)",
+                          background: "transparent", fontSize: 18, color: "#1a1a1a" }}>+</button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div style={{ marginTop: 12, textAlign: "center" }}>
+                <button onClick={handleSwitchUser} style={{ fontSize: 13, color: "#5f5e5a",
+                  background: "transparent", border: "none", textDecoration: "underline" }}>
+                  Switch user
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Leaderboard */}
+      {view === "leaderboard" && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontSize: 15, fontWeight: 500 }}>District Leaderboard</div>
+            <button onClick={fetchLeaderboard} style={{ fontSize: 13, color: "#185fa5",
+              background: "transparent", border: "0.5px solid rgba(24,95,165,0.35)",
+              borderRadius: 6, padding: "4px 10px" }}>Refresh</button>
+          </div>
+
+          {loading ? (
+            <div style={{ textAlign: "center", padding: "2rem", color: "#5f5e5a" }}>Loading leaderboard...</div>
+          ) : sorted.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "2rem", color: "#5f5e5a", fontSize: 14 }}>
+              No participants yet. Be the first to join!
+            </div>
+          ) : sorted.map(({ name, ...row }, idx) => {
+            const total = getTotal({ ...row });
+            const isMe = name === userName;
+            const medals = ["🥇", "🥈", "🥉"];
+            return (
+              <div key={name} style={{
+                background: isMe ? "#e6f1fb" : "#fff",
+                border: `0.5px solid ${isMe ? "rgba(24,95,165,0.35)" : "rgba(0,0,0,0.12)"}`,
+                borderRadius: 12, padding: "0.85rem 1.25rem", marginBottom: 8
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ fontSize: 18, width: 28, textAlign: "center" }}>
+                    {idx < 3 ? medals[idx] : <span style={{ fontSize: 13, color: "#5f5e5a" }}>#{idx + 1}</span>}
+                  </div>
+                  <Avatar name={name} size={36} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{name}{isMe ? " (you)" : ""}</div>
+                    <div style={{ display: "flex", gap: 3, marginTop: 4 }}>
+                      {DAYS.map(({ key, label }) => {
+                        const d = Number(row[key]) || 0;
+                        return (
+                          <div key={key} title={`${label}: ${d} glasses`} style={{
+                            width: 20, height: 20, borderRadius: 4,
+                            background: d >= GOAL ? "#1d9e75" : d > 0 ? "#378add" : "#f1efe8",
+                            border: "0.5px solid rgba(0,0,0,0.1)"
+                          }} />
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 18, fontWeight: 500 }}>{total}</div>
+                    <div style={{ fontSize: 11, color: "#5f5e5a" }}>glasses</div>
+                  </div>
+                </div>
+                <div style={{ marginTop: 8, height: 4, background: "#f1efe8", borderRadius: 2 }}>
+                  <div style={{ height: 4, borderRadius: 2,
+                    width: `${Math.min(100, Math.round((total / (GOAL * 5)) * 100))}%`,
+                    background: isMe ? "#185fa5" : "#888780" }} />
+                </div>
+              </div>
+            );
+          })}
+          <div style={{ marginTop: 12, textAlign: "center", fontSize: 12, color: "#888780" }}>
+            Green = goal met · Blue = partial · Gray = no log
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: "2rem", borderTop: "0.5px solid rgba(0,0,0,0.1)", paddingTop: "1rem",
+        textAlign: "center", fontSize: 12, color: "#888780" }}>
+        Marshall Public Schools · #TheRedhawkWay · April 14–18, 2025
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
